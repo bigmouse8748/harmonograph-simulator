@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>谐振图仪器 - 阶段2：真实画板和画笔</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+        }
+        
+        .container {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 20px;
+            height: 90vh;
+        }
+        
+        .controls {
+            background: #16213e;
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #4fbdba;
+        }
+        
+        .canvas-area {
+            background: #000;
+            border: 2px solid #4fbdba;
+            border-radius: 8px;
+            position: relative;
+        }
+        
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        
+        button {
+            background: #4fbdba;
+            color: #1a1a2e;
+            border: none;
+            padding: 10px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 3px 0;
+            width: 100%;
+            font-weight: bold;
+            font-size: 13px;
+        }
+        
+        button:hover {
+            background: #7ec8e3;
+        }
+        
+        .status {
+            margin: 8px 0;
+            padding: 6px;
+            background: rgba(79, 189, 186, 0.1);
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        
+        .debug {
+            background: #333;
+            padding: 8px;
+            margin: 8px 0;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        
+        h3 {
+            color: #4fbdba;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="controls">
+            <h3>🎯 阶段3：物理引擎</h3>
+            <p style="font-size: 11px; margin-bottom: 10px; color: #7ec8e3;">
+                目标：实现悬挂画板的物理模拟
+            </p>
+            
+            <button id="testCanvasBtn">1. 测试Canvas</button>
+            <button id="showBoardBtn">2. 显示画板</button>
+            <button id="showPenBtn">3. 显示画笔</button>
+            <button id="showBothBtn">4. 显示画板+画笔</button>
+            <button id="initPhysicsBtn">5. 初始化物理引擎</button>
+            <button id="startSimulationBtn">6. 启动物理模拟</button>
+            <button id="addTrailBtn">7. 添加轨迹</button>
+            <button id="clearBtn">8. 清除</button>
+            
+            <div style="margin: 10px 0;">
+                <label style="color: #4fbdba; font-size: 12px;">摆动速度:</label>
+                <input type="range" id="speedSlider" min="0.1" max="3.0" step="0.1" value="1.0" style="width: 100%; margin: 5px 0;">
+                <div style="font-size: 10px; color: #7ec8e3; text-align: center;">
+                    <span id="speedValue">1.0</span>x
+                </div>
+            </div>
+            
+            <div style="margin: 10px 0;">
+                <label style="color: #4fbdba; font-size: 12px;">空气阻力:</label>
+                <input type="range" id="dampingSlider" min="0.05" max="2.0" step="0.05" value="0.2" style="width: 100%; margin: 5px 0;">
+                <div style="font-size: 10px; color: #7ec8e3; text-align: center;">
+                    <span id="dampingValue">0.20</span>
+                </div>
+            </div>
+            
+            <div class="status">
+                Canvas状态: <span id="canvasStatus">未测试</span><br>
+                画板状态: <span id="boardStatus">未显示</span><br>
+                吊索状态: <span id="ropeStatus">未显示</span><br>
+                画笔状态: <span id="penStatus">未显示</span><br>
+                物理引擎: <span id="physicsStatus">未初始化</span><br>
+                模拟状态: <span id="simulationStatus">已停止</span><br>
+                轨迹点数: <span id="trailCount">0</span><br>
+            </div>
+            
+            <div class="debug" id="debugLog">
+                等待操作...
+            </div>
+        </div>
+        
+        <div class="canvas-area">
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        console.log('🎯 阶段2：真实画板和画笔启动');
+        
+        // 全局变量
+        let canvas, ctx;
+        let trail = []; // 简单的点数组
+        let debugMessages = [];
+        
+        // 画板和画笔状态
+        let board = {
+            x: 0,
+            y: 0,
+            width: 400,  // 初始尺寸，会在init中动态调整
+            height: 300,
+            visible: false
+        };
+        
+        let pen = {
+            x: 0,
+            y: 0,
+            visible: false,
+            touching: false
+        };
+        
+        // ========== 物理引擎 ==========
+        
+        // 悬挂画板物理引擎类
+        class SuspendedBoard {
+            constructor(params) {
+                // 画板物理参数
+                this.width = params.width || 0.8;           // 画板宽度 (米)
+                this.height = params.height || 0.6;         // 画板高度 (米)
+                this.mass = params.mass || 2.0;             // 画板质量 (kg)
+                this.thickness = params.thickness || 0.02;  // 画板厚度 (米)
+                
+                // 转动惯量 (矩形板，绕质心)
+                this.Ixx = (this.mass / 12) * (this.height * this.height + this.thickness * this.thickness);
+                this.Iyy = (this.mass / 12) * (this.width * this.width + this.thickness * this.thickness);
+                this.Izz = (this.mass / 12) * (this.width * this.width + this.height * this.height);
+                
+                // 位置和朝向 (质心坐标系)
+                this.position = { x: 0, y: 0, z: 0 };       // 质心位置 (米)
+                this.rotation = { roll: 0, pitch: 0, yaw: 0 }; // 欧拉角 (弧度)
+                
+                // 速度和角速度
+                this.velocity = { x: 0, y: 0, z: 0 };       // 线速度 (m/s)
+                this.angularVelocity = { x: 0, y: 0, z: 0 }; // 角速度 (rad/s)
+                
+                // 绳索参数
+                this.ropeLength = params.ropeLength || 1.0;  // 绳索长度 (米)
+                this.ropeStiffness = params.ropeStiffness || 500; // 弹簧常数 (N/m)
+                this.ropeDamping = params.ropeDamping || 10;     // 阻尼系数 (N·s/m)
+                
+                // 环境参数
+                this.gravity = 9.81;                        // 重力加速度 (m/s²)
+                this.airDamping = params.airDamping || 0.1;  // 空气阻尼
+                
+                // 四个绳索连接点 (相对于画板质心的本地坐标，就在画板角落)
+                this.ropeAttachments = [
+                    { x: -this.width/2, y: -this.height/2, z: 0 }, // 左上角
+                    { x:  this.width/2, y: -this.height/2, z: 0 }, // 右上角
+                    { x: -this.width/2, y:  this.height/2, z: 0 }, // 左下角
+                    { x:  this.width/2, y:  this.height/2, z: 0 }  // 右下角
+                ];
+                
+                // 悬挂点 (世界坐标系中的固定点，在画板外侧远处)
+                const suspensionSpread = Math.max(this.width, this.height) * 2.5; // 大幅增大悬挂点间距，确保明显在画板外侧
+                this.suspensionPoints = [
+                    { x: -suspensionSpread, y: -suspensionSpread, z: this.ropeLength }, // 左上
+                    { x:  suspensionSpread, y: -suspensionSpread, z: this.ropeLength }, // 右上
+                    { x: -suspensionSpread, y:  suspensionSpread, z: this.ropeLength }, // 左下
+                    { x:  suspensionSpread, y:  suspensionSpread, z: this.ropeLength }  // 右下
+                ];
+                
+                // 计算平衡位置
+                this.calculateEquilibrium();
+            }
+            
+            // 计算平衡位置
+            calculateEquilibrium() {
+                // 在平衡位置，所有力和力矩为零
+                // 重力 = 四根绳子张力的合力
+                // 四根绳子的张力相等 = mg/4
+                const equilibriumTension = (this.mass * this.gravity) / 4;
+                
+                // 平衡位置：画板质心在四个悬挂点的中心下方
+                this.equilibriumPosition = {
+                    x: (this.suspensionPoints[0].x + this.suspensionPoints[1].x + 
+                        this.suspensionPoints[2].x + this.suspensionPoints[3].x) / 4,
+                    y: (this.suspensionPoints[0].y + this.suspensionPoints[1].y + 
+                        this.suspensionPoints[2].y + this.suspensionPoints[3].y) / 4,
+                    z: this.suspensionPoints[0].z - Math.sqrt(
+                        this.ropeLength * this.ropeLength - 
+                        (this.width/2) * (this.width/2) - 
+                        (this.height/2) * (this.height/2)
+                    )
+                };
+                
+                // 设置初始位置为平衡位置
+                this.position = { ...this.equilibriumPosition };
+                
+                console.log('平衡位置计算:', this.equilibriumPosition);
+                console.log('平衡张力:', equilibriumTension, 'N');
+            }
+            
+            // 计算绳索张力
+            calculateRopeTensions() {
+                const tensions = [];
+                
+                for (let i = 0; i < 4; i++) {
+                    // 获取绳索连接点在世界坐标系中的位置
+                    const attachmentWorld = this.transformToWorld(this.ropeAttachments[i]);
+                    
+                    // 从连接点到悬挂点的向量
+                    const ropeVector = {
+                        x: this.suspensionPoints[i].x - attachmentWorld.x,
+                        y: this.suspensionPoints[i].y - attachmentWorld.y,
+                        z: this.suspensionPoints[i].z - attachmentWorld.z
+                    };
+                    
+                    // 绳索当前长度
+                    const currentLength = Math.sqrt(
+                        ropeVector.x * ropeVector.x + 
+                        ropeVector.y * ropeVector.y + 
+                        ropeVector.z * ropeVector.z
+                    );
+                    
+                    // 绳索伸长量
+                    const extension = currentLength - this.ropeLength;
+                    
+                    // 胡克定律：F = kx (只有拉力，没有压力)
+                    const tensionMagnitude = Math.max(0, this.ropeStiffness * extension);
+                    
+                    // 张力方向：从连接点指向悬挂点的单位向量
+                    const tensionDirection = {
+                        x: ropeVector.x / currentLength,
+                        y: ropeVector.y / currentLength,
+                        z: ropeVector.z / currentLength
+                    };
+                    
+                    // 张力向量
+                    tensions[i] = {
+                        magnitude: tensionMagnitude,
+                        force: {
+                            x: tensionMagnitude * tensionDirection.x,
+                            y: tensionMagnitude * tensionDirection.y,
+                            z: tensionMagnitude * tensionDirection.z
+                        },
+                        attachmentWorld: attachmentWorld
+                    };
+                }
+                
+                return tensions;
+            }
+            
+            // 本地坐标转换为世界坐标
+            transformToWorld(localPos) {
+                // 简化版本：只考虑位移，暂时忽略旋转
+                // TODO: 后续添加完整的3D旋转变换
+                return {
+                    x: this.position.x + localPos.x,
+                    y: this.position.y + localPos.y,
+                    z: this.position.z + localPos.z
+                };
+            }
+            
+            // 计算合力和合力矩
+            calculateForces() {
+                // 计算绳索张力
+                const tensions = this.calculateRopeTensions();
+                
+                // 重力
+                const gravity = {
+                    x: 0,
+                    y: 0,
+                    z: -this.mass * this.gravity
+                };
+                
+                // 合力计算
+                let totalForce = { ...gravity };
+                
+                for (let tension of tensions) {
+                    totalForce.x += tension.force.x;
+                    totalForce.y += tension.force.y;
+                    totalForce.z += tension.force.z;
+                }
+                
+                // 空气阻尼
+                totalForce.x -= this.airDamping * this.velocity.x;
+                totalForce.y -= this.airDamping * this.velocity.y;
+                totalForce.z -= this.airDamping * this.velocity.z;
+                
+                // 合力矩计算 (相对于质心)
+                let totalTorque = { x: 0, y: 0, z: 0 };
+                
+                for (let i = 0; i < tensions.length; i++) {
+                    const r = this.ropeAttachments[i]; // 力臂向量
+                    const F = tensions[i].force;       // 力向量
+                    
+                    // 叉积：τ = r × F
+                    totalTorque.x += r.y * F.z - r.z * F.y;
+                    totalTorque.y += r.z * F.x - r.x * F.z;
+                    totalTorque.z += r.x * F.y - r.y * F.x;
+                }
+                
+                return {
+                    force: totalForce,
+                    torque: totalTorque,
+                    tensions: tensions
+                };
+            }
+            
+            // 物理更新 (欧拉积分)
+            update(deltaTime) {
+                // 计算当前时刻的力和力矩
+                const { force, torque } = this.calculateForces();
+                
+                // 线性运动：F = ma
+                const acceleration = {
+                    x: force.x / this.mass,
+                    y: force.y / this.mass,
+                    z: force.z / this.mass
+                };
+                
+                // 角运动：τ = Iα (简化：假设主轴对齐)
+                const angularAcceleration = {
+                    x: torque.x / this.Ixx,
+                    y: torque.y / this.Iyy,
+                    z: torque.z / this.Izz
+                };
+                
+                // 欧拉积分更新速度
+                this.velocity.x += acceleration.x * deltaTime;
+                this.velocity.y += acceleration.y * deltaTime;
+                this.velocity.z += acceleration.z * deltaTime;
+                
+                this.angularVelocity.x += angularAcceleration.x * deltaTime;
+                this.angularVelocity.y += angularAcceleration.y * deltaTime;
+                this.angularVelocity.z += angularAcceleration.z * deltaTime;
+                
+                // 欧拉积分更新位置
+                this.position.x += this.velocity.x * deltaTime;
+                this.position.y += this.velocity.y * deltaTime;
+                this.position.z += this.velocity.z * deltaTime;
+                
+                this.rotation.roll += this.angularVelocity.x * deltaTime;
+                this.rotation.pitch += this.angularVelocity.y * deltaTime;
+                this.rotation.yaw += this.angularVelocity.z * deltaTime;
+            }
+        }
+        
+        // 全局物理引擎实例
+        let physicsEngine = null;
+        
+        // 物理循环控制
+        let animationId = null;
+        let lastTime = 0;
+        let isSimulationRunning = false;
+        const targetFPS = 60;
+        const fixedTimeStep = 1.0 / targetFPS;
+        let speedMultiplier = 1.0;  // 速度倍数
+        
+        // 鼠标拖拽控制
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        
+        // 物理循环函数
+        function physicsLoop(currentTime) {
+            if (!isSimulationRunning) return;
+            
+            // 计算时间差
+            const deltaTime = (currentTime - lastTime) / 1000.0; // 转换为秒
+            lastTime = currentTime;
+            
+            // 限制最大时间步长（避免数值不稳定）
+            const clampedDelta = Math.min(deltaTime, fixedTimeStep * 2);
+            
+            if (physicsEngine && clampedDelta > 0) {
+                // 应用速度倍数到时间步长
+                const scaledDelta = clampedDelta * speedMultiplier;
+                
+                // 更新物理引擎
+                physicsEngine.update(scaledDelta);
+                
+                // 将物理状态同步到渲染对象
+                syncPhysicsToRendering();
+                
+                // 重新绘制
+                drawPhysicsFrame();
+            }
+            
+            // 请求下一帧
+            animationId = requestAnimationFrame(physicsLoop);
+        }
+        
+        // 将物理引擎状态同步到渲染对象
+        function syncPhysicsToRendering() {
+            if (!physicsEngine) return;
+            
+            // 物理单位转换为画布坐标 (1米 = 100像素)
+            const scale = 100;
+            
+            // 画板位置 (质心)
+            board.x = canvas.width / 2 + physicsEngine.position.x * scale;
+            board.y = canvas.height / 2 + physicsEngine.position.y * scale;
+            
+            // 画板旋转 (简化：只使用Z轴旋转)
+            board.rotation = physicsEngine.rotation.yaw;
+            
+            // 画笔位置保持固定在画布中央 (这样在画纸中央作画)
+            pen.x = canvas.width / 2;
+            pen.y = canvas.height / 2;
+            
+            // 如果模拟运行中且画笔接触画板，记录轨迹点
+            if (isSimulationRunning && pen.visible) {
+                recordDrawingPoint();
+            }
+            
+            // 更新状态显示
+            updateStatus();
+        }
+        
+        // 记录绘图点（画笔在画板坐标系中的轨迹）
+        function recordDrawingPoint() {
+            // 检查画笔是否接触画板
+            checkPenTouching();
+            
+            if (pen.touching) {
+                // 计算画笔在画板坐标系中的相对位置
+                const penWorldX = pen.x;
+                const penWorldY = pen.y;
+                const boardCenterX = board.x;
+                const boardCenterY = board.y;
+                
+                // 画笔相对于画板中心的偏移
+                const relativeX = penWorldX - boardCenterX;
+                const relativeY = penWorldY - boardCenterY;
+                
+                // 考虑画板旋转（简化：先只处理无旋转情况）
+                // TODO: 后续添加完整的旋转变换
+                
+                // 检查画笔是否在白色纸张区域内（而不是整个画板）
+                const paperMargin = Math.max(20, board.width * 0.05); // 动态纸张边距
+                const paperHalfW = board.width / 2 - paperMargin;
+                const paperHalfH = board.height / 2 - paperMargin;
+                
+                if (Math.abs(relativeX) <= paperHalfW && Math.abs(relativeY) <= paperHalfH) {
+                    // 画笔在白色纸张区域内，可以作画
+                    // 转换为画板本地坐标 (以画板左上角为原点)
+                    const localX = relativeX + board.width / 2;
+                    const localY = relativeY + board.height / 2;
+                    
+                    // 添加轨迹点（存储为画板本地坐标）
+                    if (!trail) trail = [];
+                    trail.push({
+                        x: localX,
+                        y: localY,
+                        boardX: boardCenterX,  // 记录画板位置用于渲染
+                        boardY: boardCenterY,
+                        time: Date.now(),
+                        isDrawing: true  // 标记这是一个绘图点
+                    });
+                    
+                    // 暂时不限制轨迹点数量，保留所有绘制的线条
+                    // 如果性能有问题，可以启用下面的限制
+                    // if (trail.length > 100000) {
+                    //     trail.shift();
+                    // }
+                } else {
+                    // 画笔超出画板范围，添加断线标记
+                    if (!trail) trail = [];
+                    if (trail.length > 0 && trail[trail.length - 1].isDrawing) {
+                        // 如果上一个点是绘图点，添加断线标记
+                        trail.push({
+                            x: 0, y: 0, // 坐标无意义
+                            boardX: boardCenterX,
+                            boardY: boardCenterY,
+                            time: Date.now(),
+                            isDrawing: false, // 标记为断线点
+                            isBreak: true     // 断线标记
+                        });
+                    }
+                }
+            }
+        }
+        
+        // 初始化物理引擎
+        function initPhysicsEngine() {
+            log('🔧 正在初始化物理引擎...');
+            
+            // 确保画板和画笔可见
+            board.visible = true;
+            pen.visible = true;
+            
+            // 创建物理引擎实例
+            physicsEngine = new SuspendedBoard({
+                width: 0.8,           // 80cm宽度
+                height: 0.6,          // 60cm高度  
+                mass: 2.0,            // 2kg质量
+                ropeLength: 1.0,      // 1m绳长
+                ropeStiffness: 800,   // 弹簧常数
+                ropeDamping: 15,      // 阻尼系数
+                airDamping: 0.2       // 空气阻尼
+            });
+            
+            // 同步初始状态到渲染
+            syncPhysicsToRendering();
+            
+            log('✅ 物理引擎初始化完成');
+            log(`📊 平衡位置: x=${physicsEngine.equilibriumPosition.x.toFixed(3)}, y=${physicsEngine.equilibriumPosition.y.toFixed(3)}, z=${physicsEngine.equilibriumPosition.z.toFixed(3)}`);
+            
+            // 打印悬挂点信息
+            console.log('悬挂点坐标 (物理单位，米):');
+            physicsEngine.suspensionPoints.forEach((point, i) => {
+                console.log(`  悬挂点${i+1}: (${point.x.toFixed(3)}, ${point.y.toFixed(3)}, ${point.z.toFixed(3)})`);
+            });
+            
+            document.getElementById('physicsStatus').textContent = '已初始化';
+            
+            // 设置拖拽交互
+            setupDragListeners();
+            
+            // 绘制初始状态
+            drawPhysicsFrame();
+        }
+        
+        // 绘制物理模拟帧
+        function drawPhysicsFrame() {
+            // 清空画布
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制组件（按俯视图Z顺序：画板 → 绳子 → 画笔 → 轨迹）
+            if (board.visible) {
+                // 先绘制画板（在底层）
+                drawRealisticBoard();
+                
+                // 然后绘制绳子（在画板上方）
+                const x = board.x - board.width/2;
+                const y = board.y - board.height/2;
+                const w = board.width;
+                const h = board.height;
+                drawSuspensionRopes(x, y, w, h);
+            }
+            if (pen.visible) {
+                drawRealisticPen();
+                checkPenTouching();
+            }
+            
+            // 如果有轨迹，绘制轨迹
+            if (trail && trail.length > 0) {
+                renderPhysicsTrail();
+            }
+        }
+        
+        // 渲染物理模拟中的轨迹（轨迹跟随画板移动）
+        function renderPhysicsTrail() {
+            if (!trail || trail.length === 0) return;
+            
+            ctx.strokeStyle = '#ff4757';
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            if (trail.length === 1) {
+                // 单点
+                const point = trail[0];
+                const worldX = point.boardX - board.width/2 + point.x;
+                const worldY = point.boardY - board.height/2 + point.y;
+                
+                ctx.fillStyle = '#ff4757';
+                ctx.beginPath();
+                ctx.arc(worldX, worldY, 3, 0, Math.PI * 2);
+                ctx.fill();
+            } else {
+                // 绘制轨迹线，处理断线
+                ctx.beginPath();
+                let isDrawing = false;
+                
+                for (let i = 0; i < trail.length; i++) {
+                    const point = trail[i];
+                    
+                    if (point.isBreak) {
+                        // 遇到断线标记，结束当前线段
+                        if (isDrawing) {
+                            ctx.stroke();
+                            ctx.beginPath();
+                            isDrawing = false;
+                        }
+                        continue;
+                    }
+                    
+                    if (point.isDrawing) {
+                        // 将画板本地坐标转换为当前世界坐标
+                        const worldX = board.x - board.width/2 + point.x;
+                        const worldY = board.y - board.height/2 + point.y;
+                        
+                        if (!isDrawing) {
+                            // 开始新的线段
+                            ctx.moveTo(worldX, worldY);
+                            isDrawing = true;
+                        } else {
+                            // 继续当前线段
+                            ctx.lineTo(worldX, worldY);
+                        }
+                    }
+                }
+                
+                // 绘制最后的线段
+                if (isDrawing) {
+                    ctx.stroke();
+                }
+                
+                // 起点标记
+                if (trail.length > 0) {
+                    const startPoint = trail[0];
+                    const startWorldX = board.x - board.width/2 + startPoint.x;
+                    const startWorldY = board.y - board.height/2 + startPoint.y;
+                    
+                    ctx.fillStyle = '#ff4757';
+                    ctx.beginPath();
+                    ctx.arc(startWorldX, startWorldY, 4, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+        
+        // 启动物理模拟
+        function startSimulation() {
+            if (!physicsEngine) {
+                log('❌ 请先初始化物理引擎');
+                return;
+            }
+            
+            if (isSimulationRunning) {
+                log('⏸️ 停止物理模拟');
+                isSimulationRunning = false;
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                    animationId = null;
+                }
+                document.getElementById('simulationStatus').textContent = '已停止';
+                document.getElementById('startSimulationBtn').textContent = '6. 启动物理模拟';
+            } else {
+                log('▶️ 启动物理模拟');
+                
+                // 清空之前的轨迹
+                trail = [];
+                
+                isSimulationRunning = true;
+                lastTime = performance.now();
+                animationId = requestAnimationFrame(physicsLoop);
+                
+                document.getElementById('simulationStatus').textContent = '运行中';
+                document.getElementById('startSimulationBtn').textContent = '6. 停止物理模拟';
+                
+                log('🎨 画笔开始作画...');
+            }
+        }
+        
+        // ========== 鼠标拖拽交互 ==========
+        
+        // 检查鼠标是否在画板区域内
+        function isMouseOnBoard(mouseX, mouseY) {
+            if (!board.visible || !physicsEngine) return false;
+            
+            const boardLeft = board.x - board.width / 2;
+            const boardRight = board.x + board.width / 2;
+            const boardTop = board.y - board.height / 2;
+            const boardBottom = board.y + board.height / 2;
+            
+            return mouseX >= boardLeft && mouseX <= boardRight && 
+                   mouseY >= boardTop && mouseY <= boardBottom;
+        }
+        
+        // 鼠标按下事件
+        function handleMouseDown(event) {
+            if (!physicsEngine || isSimulationRunning) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
+            
+            if (isMouseOnBoard(mouseX, mouseY)) {
+                isDragging = true;
+                dragStartX = mouseX;
+                dragStartY = mouseY;
+                dragOffsetX = mouseX - board.x;
+                dragOffsetY = mouseY - board.y;
+                
+                canvas.style.cursor = 'grabbing';
+                log('🖱️ 开始拖拽画板');
+            }
+        }
+        
+        // 鼠标移动事件
+        function handleMouseMove(event) {
+            if (!physicsEngine) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
+            
+            if (isDragging && !isSimulationRunning) {
+                // 更新画板位置
+                const newBoardX = mouseX - dragOffsetX;
+                const newBoardY = mouseY - dragOffsetY;
+                
+                // 转换为物理坐标 (相对于画布中心，像素转米)
+                const scale = 100;
+                const physicsX = (newBoardX - canvas.width / 2) / scale;
+                const physicsY = (newBoardY - canvas.height / 2) / scale;
+                
+                // 更新物理引擎位置
+                physicsEngine.position.x = physicsX;
+                physicsEngine.position.y = physicsY;
+                
+                // 同步到渲染
+                syncPhysicsToRendering();
+                
+                // 重新绘制
+                drawPhysicsFrame();
+                
+                log(`🔄 拖拽位置: (${physicsX.toFixed(3)}, ${physicsY.toFixed(3)})m`);
+            } else if (!isSimulationRunning) {
+                // 更新鼠标样式
+                if (isMouseOnBoard(mouseX, mouseY)) {
+                    canvas.style.cursor = 'grab';
+                } else {
+                    canvas.style.cursor = 'default';
+                }
+            }
+        }
+        
+        // 鼠标释放事件
+        function handleMouseUp(event) {
+            if (isDragging) {
+                isDragging = false;
+                canvas.style.cursor = 'default';
+                
+                const scale = 100;
+                const finalX = physicsEngine.position.x;
+                const finalY = physicsEngine.position.y;
+                
+                log(`✅ 画板拖拽完成，最终位置: (${finalX.toFixed(3)}, ${finalY.toFixed(3)})m`);
+                log('💡 点击"启动物理模拟"开始摆动');
+            }
+        }
+        
+        // 设置拖拽事件监听器
+        function setupDragListeners() {
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('mouseleave', handleMouseUp); // 鼠标离开画布时停止拖拽
+            
+            log('🖱️ 拖拽交互已启用');
+        }
+        
+        // 调试日志
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            const logMsg = `[${time}] ${message}`;
+            console.log(logMsg);
+            
+            debugMessages.push(logMsg);
+            if (debugMessages.length > 8) {
+                debugMessages.shift();
+            }
+            
+            document.getElementById('debugLog').textContent = debugMessages.join('\n');
+        }
+        
+        // 初始化
+        function init() {
+            log('🔧 初始化...');
+            
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            
+            // 设置画布尺寸
+            function resizeCanvas() {
+                const rect = canvas.parentElement.getBoundingClientRect();
+                canvas.width = rect.width - 4;
+                canvas.height = rect.height - 4;
+                
+                // 重新计算画板尺寸
+                board.width = Math.min(canvas.width * 0.8, canvas.height * 0.8);
+                board.height = board.width * 0.7;
+                board.x = canvas.width / 2;
+                board.y = canvas.height / 2;
+                
+                // 重新计算画笔位置
+                pen.x = board.x - board.width/2 + 60;
+                pen.y = board.y - board.height/2 + 40;
+                
+                log(`画布: ${canvas.width} x ${canvas.height}, 画板: ${board.width.toFixed(0)} x ${board.height.toFixed(0)}`);
+                updateStatus();
+            }
+            
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+            
+            // 设置画板和画笔初始位置
+            // 画板占据画布的80%空间
+            board.width = Math.min(canvas.width * 0.8, canvas.height * 0.8);
+            board.height = board.width * 0.7; // 保持合理比例
+            board.x = canvas.width / 2;
+            board.y = canvas.height / 2;
+            
+            // 画笔位置在画板左上角附近
+            pen.x = board.x - board.width/2 + 60;
+            pen.y = board.y - board.height/2 + 40;
+            
+            setupEventListeners();
+            log('✅ 初始化完成');
+        }
+        
+        // 测试Canvas基础功能
+        function testCanvas() {
+            log('🧪 测试Canvas基础功能...');
+            
+            // 清除画布
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 测试填充
+            ctx.fillStyle = '#4fbdba';
+            ctx.fillRect(50, 50, 100, 60);
+            
+            // 测试文字
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.fillText('Canvas 工作正常', 60, 85);
+            
+            // 测试线条
+            ctx.strokeStyle = '#ff4757';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(50, 120);
+            ctx.lineTo(150, 120);
+            ctx.stroke();
+            
+            log('✅ Canvas基础功能正常');
+            document.getElementById('canvasStatus').textContent = '正常';
+            document.getElementById('renderStatus').textContent = '基础渲染OK';
+        }
+        
+        // 添加测试轨迹
+        function addTestTrail() {
+            log('➕ 添加测试轨迹...');
+            
+            // 清除现有轨迹
+            trail = [];
+            
+            // 创建简单的波浪形轨迹
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            for (let i = 0; i < 30; i++) {
+                trail.push({
+                    x: centerX - 150 + i * 10,
+                    y: centerY + Math.sin(i * 0.3) * 50
+                });
+            }
+            
+            log(`创建轨迹: ${trail.length} 个点`);
+            renderTrail();
+            updateStatus();
+        }
+        
+        // 渲染轨迹（核心功能）
+        function renderTrail() {
+            log(`🎨 渲染轨迹: ${trail.length} 个点`);
+            
+            if (trail.length === 0) {
+                log('❌ 无轨迹数据');
+                return;
+            }
+            
+            // 清除画布
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 重绘画板和画笔（如果可见）
+            if (board.visible) drawRealisticBoard();
+            if (pen.visible) drawRealisticPen();
+            
+            // 绘制轨迹
+            ctx.strokeStyle = '#ff4757';
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            ctx.beginPath();
+            
+            if (trail.length === 1) {
+                // 单点
+                const point = trail[0];
+                ctx.fillStyle = '#ff4757';
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+                log(`单点: (${point.x.toFixed(1)}, ${point.y.toFixed(1)})`);
+            } else {
+                // 多点连线
+                ctx.moveTo(trail[0].x, trail[0].y);
+                for (let i = 1; i < trail.length; i++) {
+                    ctx.lineTo(trail[i].x, trail[i].y);
+                }
+                ctx.stroke();
+                
+                // 起点标记
+                ctx.fillStyle = '#ff4757';
+                ctx.beginPath();
+                ctx.arc(trail[0].x, trail[0].y, 6, 0, Math.PI * 2);
+                ctx.fill();
+                
+                log(`连线: ${trail.length} 个点`);
+            }
+            
+            log('✅ 轨迹渲染完成');
+            document.getElementById('renderStatus').textContent = '轨迹渲染OK';
+        }
+        
+        // 绘制四根吊索 - 固定悬挂点，绳子跟随画板摆动
+        function drawSuspensionRopes(boardX, boardY, boardW, boardH) {
+            if (!physicsEngine) {
+                // 如果没有物理引擎，使用静态悬挂点（向外延伸效果）
+                const centerX = boardX + boardW / 2;
+                const centerY = boardY + boardH / 2;
+                const ropeExtension = Math.min(boardW, boardH) * 0.4;
+                
+                const corners = [
+                    { x: boardX, y: boardY },
+                    { x: boardX + boardW, y: boardY },
+                    { x: boardX, y: boardY + boardH },
+                    { x: boardX + boardW, y: boardY + boardH }
+                ];
+                
+                corners.forEach((corner, index) => {
+                    const dirX = (corner.x - centerX) / Math.sqrt((corner.x - centerX)**2 + (corner.y - centerY)**2);
+                    const dirY = (corner.y - centerY) / Math.sqrt((corner.x - centerX)**2 + (corner.y - centerY)**2);
+                    const suspensionX = corner.x + dirX * ropeExtension;
+                    const suspensionY = corner.y + dirY * ropeExtension;
+                    drawSingleRope(corner.x, corner.y, suspensionX, suspensionY, index);
+                });
+                return;
+            }
+            
+            // 使用物理引擎的固定悬挂点
+            const scale = 100; // 物理单位转像素比例
+            
+            // 画板中心点
+            const boardCenterX = boardX + boardW / 2;
+            const boardCenterY = boardY + boardH / 2;
+            
+            // 绳子连接点偏移量（在画板边缘外侧）
+            const connectionOffset = 8; // 像素
+            
+            // 绳子在画板边缘的连接点（外侧）
+            const connectionPoints = [
+                { x: boardX - connectionOffset, y: boardY - connectionOffset },              // 左上角外侧
+                { x: boardX + boardW + connectionOffset, y: boardY - connectionOffset },     // 右上角外侧
+                { x: boardX - connectionOffset, y: boardY + boardH + connectionOffset },     // 左下角外侧
+                { x: boardX + boardW + connectionOffset, y: boardY + boardH + connectionOffset } // 右下角外侧
+            ];
+            
+            // 画板四个角的实际像素坐标
+            const boardCorners = [
+                { x: boardX, y: boardY },                    // 左上角
+                { x: boardX + boardW, y: boardY },           // 右上角
+                { x: boardX, y: boardY + boardH },           // 左下角
+                { x: boardX + boardW, y: boardY + boardH }   // 右下角
+            ];
+            
+            // 设置悬挂点在合适位置，离画板稍微近一点
+            const margin = 120; // 距离画布边缘的距离，比之前的50像素更近画板
+            const suspensionPoints2D = [
+                { x: margin, y: margin },                           // 左上
+                { x: canvas.width - margin, y: margin },            // 右上
+                { x: margin, y: canvas.height - margin },           // 左下
+                { x: canvas.width - margin, y: canvas.height - margin } // 右下
+            ];
+            
+            // 绘制从固定悬挂点到画板角落的绳子
+            for (let i = 0; i < 4; i++) {
+                // 使用强制设定的悬挂点位置
+                const suspensionX = suspensionPoints2D[i].x;
+                const suspensionY = suspensionPoints2D[i].y;
+                
+                // 调试信息：打印坐标
+                console.log(`绳子${i+1}: 悬挂点(${suspensionX.toFixed(1)}, ${suspensionY.toFixed(1)}) → 画板角落(${boardCorners[i].x.toFixed(1)}, ${boardCorners[i].y.toFixed(1)})`);
+                
+                // 绳子从固定悬挂点连接到画板的实际角落
+                drawSingleRope(suspensionX, suspensionY, boardCorners[i].x, boardCorners[i].y, i);
+            }
+        }
+        
+        // 绘制单根绳子 - 俯视图斜向绳索
+        function drawSingleRope(startX, startY, endX, endY, index) {
+            // 绳子的粗细
+            const ropeWidth = 4;
+            
+            // 计算绳子长度和角度
+            const length = Math.sqrt((endX - startX)**2 + (endY - startY)**2);
+            const angle = Math.atan2(endY - startY, endX - startX);
+            
+            ctx.save();
+            
+            // 设置绳子半透明，以便看到下方的画板和轨迹
+            ctx.globalAlpha = 0.6;
+            
+            // 绳子主体 - 沿着绳子方向的渐变
+            const ropeGradient = ctx.createLinearGradient(startX, startY, endX, endY);
+            ropeGradient.addColorStop(0, '#654321');    // 画板连接处较暗
+            ropeGradient.addColorStop(0.3, '#8B4513'); 
+            ropeGradient.addColorStop(0.7, '#A0522D');
+            ropeGradient.addColorStop(1, '#D2B48C');    // 悬挂点处较亮
+            
+            ctx.strokeStyle = ropeGradient;
+            ctx.lineWidth = ropeWidth;
+            ctx.lineCap = 'round';
+            
+            // 绘制主绳索
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+            
+            // 绘制绳子纤维纹理 - 沿着绳子方向
+            ctx.strokeStyle = 'rgba(139, 69, 19, 0.4)';
+            ctx.lineWidth = 1;
+            
+            const steps = Math.floor(length / 6);
+            for (let i = 0; i < steps; i++) {
+                const t = i / steps;
+                const x = startX + (endX - startX) * t;
+                const y = startY + (endY - startY) * t;
+                
+                // 垂直于绳子方向的短线纹理
+                const perpX = Math.cos(angle + Math.PI/2) * 1;
+                const perpY = Math.sin(angle + Math.PI/2) * 1;
+                
+                ctx.beginPath();
+                ctx.moveTo(x - perpX, y - perpY);
+                ctx.lineTo(x + perpX, y + perpY);
+                ctx.stroke();
+            }
+            
+            // 绳子高光 - 沿着一侧
+            ctx.strokeStyle = 'rgba(205, 133, 63, 0.8)';
+            ctx.lineWidth = 1;
+            const highlightOffsetX = Math.cos(angle + Math.PI/2) * 1.5;
+            const highlightOffsetY = Math.sin(angle + Math.PI/2) * 1.5;
+            
+            ctx.beginPath();
+            ctx.moveTo(startX + highlightOffsetX, startY + highlightOffsetY);
+            ctx.lineTo(endX + highlightOffsetX, endY + highlightOffsetY);
+            ctx.stroke();
+            
+            ctx.restore();
+            
+            // 画板角落的绳子连接点
+            drawRopeConnection(startX, startY);
+            
+            // 悬挂点标记
+            drawSuspensionPoint(endX, endY, index);
+        }
+        
+        // 绘制绳子与画板的连接点
+        function drawRopeConnection(x, y) {
+            ctx.save();
+            ctx.globalAlpha = 0.8;  // 稍微透明
+            
+            // 金属环
+            ctx.strokeStyle = '#C0C0C0';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 金属环内圈
+            ctx.strokeStyle = '#A0A0A0';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 连接螺丝
+            ctx.fillStyle = '#808080';
+            ctx.beginPath();
+            ctx.arc(x, y, 1, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+        
+        // 绘制悬挂点 - 俯视图中的悬挂装置
+        function drawSuspensionPoint(x, y, index) {
+            ctx.save();
+            ctx.globalAlpha = 0.7;  // 透明度，不遮挡轨迹
+            
+            // 悬挂装置 - 圆形金属环 (从俯视角度看)
+            ctx.fillStyle = '#404040';
+            ctx.beginPath();
+            ctx.arc(x, y, 8, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 金属环高光
+            ctx.strokeStyle = '#808080';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 内圈
+            ctx.strokeStyle = '#C0C0C0';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // 标记悬挂点编号 (调试用)
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.font = '8px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText((index + 1).toString(), x, y + 2);
+            
+            ctx.restore();
+        }
+        
+        // 绘制真实的画板
+        function drawRealisticBoard() {
+            if (!board.visible) return;
+            
+            log('🎨 绘制真实画板');
+            
+            const x = board.x - board.width/2;
+            const y = board.y - board.height/2;
+            const w = board.width;
+            const h = board.height;
+            
+            // 画板阴影
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(x + 5, y + 5, w, h);
+            
+            // 木制画板背景 - 渐变效果
+            const gradient = ctx.createLinearGradient(x, y, x, y + h);
+            gradient.addColorStop(0, '#D4A574');
+            gradient.addColorStop(0.5, '#C19A6B');
+            gradient.addColorStop(1, '#A0825D');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(x, y, w, h);
+            
+            // 木纹效果
+            ctx.strokeStyle = 'rgba(139, 69, 19, 0.3)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 5; i++) {
+                ctx.beginPath();
+                ctx.moveTo(x + 10, y + 20 + i * 30);
+                ctx.bezierCurveTo(x + w/3, y + 15 + i * 30, x + 2*w/3, y + 25 + i * 30, x + w - 10, y + 20 + i * 30);
+                ctx.stroke();
+            }
+            
+            // 画板边框 - 金属夹子效果
+            ctx.strokeStyle = '#8B4513';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(x, y, w, h);
+            
+            // 多个夹子（大画板需要更多夹子）
+            const clipWidth = Math.min(40, w * 0.08);
+            const clipCount = Math.floor(w / 150) + 1; // 根据画板宽度确定夹子数量
+            
+            for (let i = 0; i < clipCount; i++) {
+                const clipX = x + (w / (clipCount + 1)) * (i + 1) - clipWidth/2;
+                
+                // 夹子主体
+                ctx.fillStyle = '#C0C0C0';
+                ctx.fillRect(clipX, y - 10, clipWidth, 20);
+                ctx.strokeStyle = '#808080';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(clipX, y - 10, clipWidth, 20);
+                
+                // 夹子螺丝
+                ctx.fillStyle = '#696969';
+                ctx.beginPath();
+                ctx.arc(clipX + clipWidth/3, y, 2, 0, Math.PI * 2);
+                ctx.arc(clipX + 2*clipWidth/3, y, 2, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            // 纸张效果（适应大画板）
+            ctx.fillStyle = '#FFFEF7';
+            const paperMargin = Math.max(20, w * 0.05); // 根据画板尺寸调整边距
+            ctx.fillRect(x + paperMargin, y + paperMargin, w - 2*paperMargin, h - 2*paperMargin);
+            
+            // 纸张边缘阴影
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x + paperMargin, y + paperMargin, w - 2*paperMargin, h - 2*paperMargin);
+            
+            // 纸张折痕（大纸张的真实感）
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.lineWidth = 0.5;
+            
+            // 水平折痕
+            for (let i = 1; i < 4; i++) {
+                const lineY = y + paperMargin + (h - 2*paperMargin) * i / 4;
+                ctx.beginPath();
+                ctx.moveTo(x + paperMargin, lineY);
+                ctx.lineTo(x + w - paperMargin, lineY);
+                ctx.stroke();
+            }
+            
+            // 垂直折痕
+            for (let i = 1; i < 4; i++) {
+                const lineX = x + paperMargin + (w - 2*paperMargin) * i / 4;
+                ctx.beginPath();
+                ctx.moveTo(lineX, y + paperMargin);
+                ctx.lineTo(lineX, y + h - paperMargin);
+                ctx.stroke();
+            }
+            
+            // 绘制四个角的绳子连接环
+            const connectionPoints = [
+                { x: x, y: y },                    // 左上角
+                { x: x + w, y: y },                // 右上角
+                { x: x, y: y + h },                // 左下角
+                { x: x + w, y: y + h }             // 右下角
+            ];
+            
+            connectionPoints.forEach((point, index) => {
+                drawRopeConnection(point.x, point.y);
+            });
+            
+            document.getElementById('boardStatus').textContent = '已显示';
+            document.getElementById('ropeStatus').textContent = '四根吊索已显示';
+        }
+        
+        // 绘制真实的画笔（俯视图，倾斜角度）
+        function drawRealisticPen() {
+            if (!pen.visible) return;
+            
+            log('🖊️ 绘制真实画笔');
+            
+            const x = pen.x;
+            const y = pen.y;
+            
+            // 保存当前变换状态
+            ctx.save();
+            
+            // 移动到画笔位置并旋转45度（俯视图倾斜效果）
+            ctx.translate(x + 25, y + 40);
+            ctx.rotate(Math.PI / 4); // 45度角
+            
+            // 画笔阴影（倾斜）
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.fillRect(2, 2, 12, 85);
+            
+            // 笔杆主体 - 椭圆形（俯视图效果）
+            const penGradient = ctx.createLinearGradient(-6, 0, 18, 0);
+            if (pen.touching) {
+                penGradient.addColorStop(0, '#FF4757');
+                penGradient.addColorStop(0.3, '#FF6B6B');
+                penGradient.addColorStop(0.7, '#FF4757');
+                penGradient.addColorStop(1, '#E84849');
+            } else {
+                penGradient.addColorStop(0, '#3A9B9C');
+                penGradient.addColorStop(0.3, '#4FBDBA');
+                penGradient.addColorStop(0.7, '#4FBDBA');
+                penGradient.addColorStop(1, '#3A9B9C');
+            }
+            ctx.fillStyle = penGradient;
+            
+            // 绘制椭圆形笔身
+            ctx.beginPath();
+            ctx.ellipse(6, 35, 6, 35, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 笔身高光（左侧）
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.beginPath();
+            ctx.ellipse(2, 35, 2, 30, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 笔身阴影（右侧）
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+            ctx.beginPath();
+            ctx.ellipse(10, 35, 2, 30, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 金属笔尖部分
+            ctx.fillStyle = '#C0C0C0';
+            ctx.beginPath();
+            ctx.ellipse(6, 72, 4, 6, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 笔尖金属光泽
+            ctx.fillStyle = '#E5E5E5';
+            ctx.beginPath();
+            ctx.ellipse(4, 70, 1.5, 4, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 尖锐的笔尖
+            ctx.fillStyle = pen.touching ? '#000000' : '#2C3E50';
+            ctx.beginPath();
+            ctx.moveTo(3, 78);
+            ctx.lineTo(9, 78);
+            ctx.lineTo(6, 82);
+            ctx.closePath();
+            ctx.fill();
+            
+            // 笔帽装饰环（椭圆形）
+            ctx.strokeStyle = '#FFD700';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.ellipse(6, 15, 6.5, 2, 0, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            // 笔夹（俯视图效果）
+            ctx.fillStyle = '#C0C0C0';
+            ctx.beginPath();
+            ctx.ellipse(13, 15, 2, 8, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            ctx.strokeStyle = '#A0A0A0';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.ellipse(13, 15, 2, 8, 0, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            // 笔夹高光
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.beginPath();
+            ctx.ellipse(11.5, 12, 0.8, 4, 0, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 恢复变换状态
+            ctx.restore();
+            
+            document.getElementById('penStatus').textContent = pen.touching ? '接触画板' : '悬浮';
+        }
+        
+        // 显示画板
+        function showBoard() {
+            log('📋 显示画板');
+            board.visible = true;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawRealisticBoard();
+        }
+        
+        // 显示画笔
+        function showPen() {
+            log('🖊️ 显示画笔');
+            pen.visible = true;
+            // 检查是否接触画板
+            checkPenTouching();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (board.visible) drawRealisticBoard();
+            drawRealisticPen();
+        }
+        
+        // 显示画板和画笔
+        function showBoth() {
+            log('📋🖊️ 显示画板和画笔');
+            board.visible = true;
+            pen.visible = true;
+            checkPenTouching();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawRealisticBoard();
+            drawRealisticPen();
+        }
+        
+        // 检查画笔是否接触画板
+        function checkPenTouching() {
+            // 画笔现在在画布中央，笔尖就是画笔位置（简化处理）
+            const penTipX = pen.x;
+            const penTipY = pen.y;
+            
+            const paperMargin = Math.max(20, board.width * 0.05); // 动态纸张边距
+            const boardLeft = board.x - board.width/2 + paperMargin;
+            const boardRight = board.x + board.width/2 - paperMargin;
+            const boardTop = board.y - board.height/2 + paperMargin;
+            const boardBottom = board.y + board.height/2 - paperMargin;
+            
+            pen.touching = penTipX >= boardLeft && penTipX <= boardRight && 
+                          penTipY >= boardTop && penTipY <= boardBottom;
+        }
+        
+        // 清除
+        function clearAll() {
+            log('🗑️ 清除所有');
+            trail = [];
+            board.visible = false;
+            pen.visible = false;
+            pen.touching = false;
+            testCanvas();
+            updateStatus();
+        }
+        
+        // 更新状态
+        function updateStatus() {
+            document.getElementById('trailCount').textContent = trail.length;
+            document.getElementById('boardStatus').textContent = board.visible ? '已显示' : '未显示';
+            document.getElementById('ropeStatus').textContent = board.visible ? '四根吊索已显示' : '未显示';
+            document.getElementById('penStatus').textContent = 
+                pen.visible ? (pen.touching ? '接触画板' : '悬浮') : '未显示';
+        }
+        
+        // 设置事件监听器
+        function setupEventListeners() {
+            document.getElementById('testCanvasBtn').addEventListener('click', testCanvas);
+            document.getElementById('showBoardBtn').addEventListener('click', showBoard);
+            document.getElementById('showPenBtn').addEventListener('click', showPen);
+            document.getElementById('showBothBtn').addEventListener('click', showBoth);
+            document.getElementById('initPhysicsBtn').addEventListener('click', initPhysicsEngine);
+            document.getElementById('startSimulationBtn').addEventListener('click', startSimulation);
+            document.getElementById('addTrailBtn').addEventListener('click', addTestTrail);
+            document.getElementById('clearBtn').addEventListener('click', clearAll);
+            
+            // 速度控制滑块
+            const speedSlider = document.getElementById('speedSlider');
+            const speedValue = document.getElementById('speedValue');
+            speedSlider.addEventListener('input', function() {
+                speedMultiplier = parseFloat(this.value);
+                speedValue.textContent = speedMultiplier.toFixed(1);
+                log(`🎛️ 摆动速度调整为: ${speedMultiplier}x`);
+            });
+            
+            // 阻力控制滑块
+            const dampingSlider = document.getElementById('dampingSlider');
+            const dampingValue = document.getElementById('dampingValue');
+            dampingSlider.addEventListener('input', function() {
+                const newDamping = parseFloat(this.value);
+                dampingValue.textContent = newDamping.toFixed(2);
+                
+                // 实时更新物理引擎的阻力参数
+                if (physicsEngine) {
+                    physicsEngine.airDamping = newDamping;
+                    log(`🌬️ 空气阻力调整为: ${newDamping}`);
+                }
+            });
+            
+            log('✅ 事件监听器设置完成');
+        }
+        
+        // 启动
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

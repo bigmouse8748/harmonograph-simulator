@@ -1,0 +1,29 @@
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*_backup.html
+*_phase*.html
+
+# Editor directories and files
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Optional npm/node files (if you add build tools later)
+node_modules/
+package-lock.json
+yarn.lock
