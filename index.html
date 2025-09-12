@@ -110,15 +110,15 @@
                 <label style="color: #4fbdba; font-size: 12px;">摆动速度:</label>
                 <input type="range" id="speedSlider" min="0.1" max="3.0" step="0.1" value="1.0" style="width: 100%; margin: 5px 0;">
                 <div style="font-size: 10px; color: #7ec8e3; text-align: center;">
-                    <span id="speedValue">1.0</span>x
+                    <span id="speedValue">1.0x (真实速度)</span>
                 </div>
             </div>
             
             <div style="margin: 10px 0;">
                 <label style="color: #4fbdba; font-size: 12px;">空气阻力:</label>
-                <input type="range" id="dampingSlider" min="0.05" max="2.0" step="0.05" value="0.2" style="width: 100%; margin: 5px 0;">
+                <input type="range" id="dampingSlider" min="0.005" max="0.5" step="0.005" value="0.01" style="width: 100%; margin: 5px 0;">
                 <div style="font-size: 10px; color: #7ec8e3; text-align: center;">
-                    <span id="dampingValue">0.20</span>
+                    <span id="dampingValue">0.01</span>
                 </div>
             </div>
             
@@ -194,6 +194,11 @@
                 this.ropeLength = params.ropeLength || 1.0;  // 绳索长度 (米)
                 this.ropeStiffness = params.ropeStiffness || 500; // 弹簧常数 (N/m)
                 this.ropeDamping = params.ropeDamping || 10;     // 阻尼系数 (N·s/m)
+                
+                // 计算基于绳长的等效刚度（模拟真实单摆）
+                // 对于小角度摆动，恢复力 F ≈ -mg·sin(θ) ≈ -mg·x/L
+                // 等效弹簧常数 k_eff = mg/L
+                this.effectiveStiffness = (this.mass * this.gravity) / this.ropeLength;
                 
                 // 环境参数
                 this.gravity = 9.81;                        // 重力加速度 (m/s²)
@@ -402,7 +407,7 @@
         let isSimulationRunning = false;
         const targetFPS = 60;
         const fixedTimeStep = 1.0 / targetFPS;
-        let speedMultiplier = 1.0;  // 速度倍数
+        let speedMultiplier = 1.0;  // 速度倍数（1.0x = 真实物理速度）
         
         // 鼠标拖拽控制
         let isDragging = false;
@@ -564,14 +569,19 @@
             pen.visible = true;
             
             // 创建物理引擎实例
+            // 物理参数经过精心调整以获得真实的摆动速度
+            // 基于单摆公式 T = 2π√(L/g)：
+            // - 1.5m绳长的理论周期约为2.45秒
+            // - 自然频率 ω ≈ 2.56 rad/s
+            // - 这定义了1.0x速度（真实物理速度）
             physicsEngine = new SuspendedBoard({
                 width: 0.8,           // 80cm宽度
                 height: 0.6,          // 60cm高度  
-                mass: 2.0,            // 2kg质量
-                ropeLength: 1.0,      // 1m绳长
-                ropeStiffness: 800,   // 弹簧常数
-                ropeDamping: 15,      // 阻尼系数
-                airDamping: 0.2       // 空气阻尼
+                mass: 8.0,            // 8kg质量（更重的画板，惯性更大，摆动更慢）
+                ropeLength: 1.5,      // 1.5m绳长（更长的绳子，更慢的摆动）
+                ropeStiffness: 30,    // 弹簧常数（非常低，模拟柔性绳索）
+                ropeDamping: 1,       // 阻尼系数（很小，允许长时间摆动）
+                airDamping: 0.01      // 空气阻尼（极小值）
             });
             
             // 同步初始状态到渲染
@@ -579,6 +589,11 @@
             
             log('✅ 物理引擎初始化完成');
             log(`📊 平衡位置: x=${physicsEngine.equilibriumPosition.x.toFixed(3)}, y=${physicsEngine.equilibriumPosition.y.toFixed(3)}, z=${physicsEngine.equilibriumPosition.z.toFixed(3)}`);
+            
+            // 计算并显示自然频率
+            const naturalFreq = Math.sqrt(9.81 / physicsEngine.ropeLength);
+            const period = 2 * Math.PI / naturalFreq;
+            log(`🔄 自然频率: ${naturalFreq.toFixed(2)} rad/s, 周期: ${period.toFixed(2)}秒`);
             
             // 打印悬挂点信息
             console.log('悬挂点坐标 (物理单位，米):');
@@ -1493,7 +1508,8 @@
             const speedValue = document.getElementById('speedValue');
             speedSlider.addEventListener('input', function() {
                 speedMultiplier = parseFloat(this.value);
-                speedValue.textContent = speedMultiplier.toFixed(1);
+                const speedText = speedMultiplier.toFixed(1) + 'x' + (speedMultiplier === 1.0 ? ' (真实速度)' : '');
+                speedValue.innerHTML = speedText;
                 log(`🎛️ 摆动速度调整为: ${speedMultiplier}x`);
             });
             
