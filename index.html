@@ -467,6 +467,9 @@
             updateStatus();
         }
         
+        // 记录上一帧画笔是否在纸张内的状态
+        let wasPenInPaper = false;
+        
         // 记录绘图点（画笔在画板坐标系中的轨迹）
         function recordDrawingPoint() {
             // 检查画笔是否接触画板
@@ -491,14 +494,29 @@
                 const paperHalfW = board.width / 2 - paperMargin;
                 const paperHalfH = board.height / 2 - paperMargin;
                 
-                if (Math.abs(relativeX) <= paperHalfW && Math.abs(relativeY) <= paperHalfH) {
+                const isPenInPaper = Math.abs(relativeX) <= paperHalfW && Math.abs(relativeY) <= paperHalfH;
+                
+                if (isPenInPaper) {
                     // 画笔在白色纸张区域内，可以作画
                     // 转换为画板本地坐标 (以画板左上角为原点)
                     const localX = relativeX + board.width / 2;
                     const localY = relativeY + board.height / 2;
                     
-                    // 添加轨迹点（存储为画板本地坐标）
                     if (!trail) trail = [];
+                    
+                    // 如果画笔刚刚进入纸张区域（从外部进入），先添加断线标记
+                    if (!wasPenInPaper && trail.length > 0) {
+                        trail.push({
+                            x: 0, y: 0, // 坐标无意义
+                            boardX: boardCenterX,
+                            boardY: boardCenterY,
+                            time: Date.now(),
+                            isDrawing: false,
+                            isBreak: true     // 断线标记
+                        });
+                    }
+                    
+                    // 添加轨迹点（存储为画板本地坐标）
                     trail.push({
                         x: localX,
                         y: localY,
@@ -508,26 +526,32 @@
                         isDrawing: true  // 标记这是一个绘图点
                     });
                     
+                    wasPenInPaper = true;
+                    
                     // 暂时不限制轨迹点数量，保留所有绘制的线条
                     // 如果性能有问题，可以启用下面的限制
                     // if (trail.length > 100000) {
                     //     trail.shift();
                     // }
                 } else {
-                    // 画笔超出画板范围，添加断线标记
-                    if (!trail) trail = [];
-                    if (trail.length > 0 && trail[trail.length - 1].isDrawing) {
-                        // 如果上一个点是绘图点，添加断线标记
+                    // 画笔超出纸张范围
+                    if (wasPenInPaper && trail.length > 0) {
+                        // 如果画笔刚刚离开纸张区域，添加断线标记
+                        if (!trail) trail = [];
                         trail.push({
                             x: 0, y: 0, // 坐标无意义
                             boardX: boardCenterX,
                             boardY: boardCenterY,
                             time: Date.now(),
-                            isDrawing: false, // 标记为断线点
+                            isDrawing: false,
                             isBreak: true     // 断线标记
                         });
                     }
+                    wasPenInPaper = false;
                 }
+            } else {
+                // 画笔没有接触画板
+                wasPenInPaper = false;
             }
         }
         
@@ -1295,15 +1319,16 @@
             ctx.save();
             
             // 移动到画笔位置并旋转45度（俯视图倾斜效果）
-            ctx.translate(x + 25, y + 40);
+            // 注意：笔尖应该正好在 (pen.x, pen.y) 位置
+            ctx.translate(x, y);
             ctx.rotate(Math.PI / 4); // 45度角
             
-            // 画笔阴影（倾斜）
+            // 画笔阴影（倾斜）- 调整位置让笔尖在原点
             ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
-            ctx.fillRect(2, 2, 12, 85);
+            ctx.fillRect(-4, -82, 12, 85);
             
-            // 笔杆主体 - 椭圆形（俯视图效果）
-            const penGradient = ctx.createLinearGradient(-6, 0, 18, 0);
+            // 笔杆主体 - 椭圆形（俯视图效果）- 调整位置让笔尖在原点
+            const penGradient = ctx.createLinearGradient(-6, -80, 6, -80);
             if (pen.touching) {
                 penGradient.addColorStop(0, '#FF4757');
                 penGradient.addColorStop(0.3, '#FF6B6B');
@@ -1317,67 +1342,67 @@
             }
             ctx.fillStyle = penGradient;
             
-            // 绘制椭圆形笔身
+            // 绘制椭圆形笔身 - 调整位置让笔尖在原点
             ctx.beginPath();
-            ctx.ellipse(6, 35, 6, 35, 0, 0, 2 * Math.PI);
+            ctx.ellipse(0, -45, 6, 35, 0, 0, 2 * Math.PI);
             ctx.fill();
             
             // 笔身高光（左侧）
             ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
             ctx.beginPath();
-            ctx.ellipse(2, 35, 2, 30, 0, 0, 2 * Math.PI);
+            ctx.ellipse(-4, -45, 2, 30, 0, 0, 2 * Math.PI);
             ctx.fill();
             
             // 笔身阴影（右侧）
             ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
             ctx.beginPath();
-            ctx.ellipse(10, 35, 2, 30, 0, 0, 2 * Math.PI);
+            ctx.ellipse(4, -45, 2, 30, 0, 0, 2 * Math.PI);
             ctx.fill();
             
-            // 金属笔尖部分
+            // 金属笔尖部分 - 调整位置让笔尖在原点
             ctx.fillStyle = '#C0C0C0';
             ctx.beginPath();
-            ctx.ellipse(6, 72, 4, 6, 0, 0, 2 * Math.PI);
+            ctx.ellipse(0, -8, 4, 6, 0, 0, 2 * Math.PI);
             ctx.fill();
             
             // 笔尖金属光泽
             ctx.fillStyle = '#E5E5E5';
             ctx.beginPath();
-            ctx.ellipse(4, 70, 1.5, 4, 0, 0, 2 * Math.PI);
+            ctx.ellipse(-2, -10, 1.5, 4, 0, 0, 2 * Math.PI);
             ctx.fill();
             
-            // 尖锐的笔尖
+            // 尖锐的笔尖 - 现在正好在原点(0,0)
             ctx.fillStyle = pen.touching ? '#000000' : '#2C3E50';
             ctx.beginPath();
-            ctx.moveTo(3, 78);
-            ctx.lineTo(9, 78);
-            ctx.lineTo(6, 82);
+            ctx.moveTo(-3, -2);
+            ctx.lineTo(3, -2);
+            ctx.lineTo(0, 0);  // 笔尖正好在原点
             ctx.closePath();
             ctx.fill();
             
-            // 笔帽装饰环（椭圆形）
+            // 笔帽装饰环（椭圆形）- 调整位置
             ctx.strokeStyle = '#FFD700';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.ellipse(6, 15, 6.5, 2, 0, 0, 2 * Math.PI);
+            ctx.ellipse(0, -65, 6.5, 2, 0, 0, 2 * Math.PI);
             ctx.stroke();
             
-            // 笔夹（俯视图效果）
+            // 笔夹（俯视图效果）- 调整位置
             ctx.fillStyle = '#C0C0C0';
             ctx.beginPath();
-            ctx.ellipse(13, 15, 2, 8, 0, 0, 2 * Math.PI);
+            ctx.ellipse(7, -65, 2, 8, 0, 0, 2 * Math.PI);
             ctx.fill();
             
             ctx.strokeStyle = '#A0A0A0';
             ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.ellipse(13, 15, 2, 8, 0, 0, 2 * Math.PI);
+            ctx.ellipse(7, -65, 2, 8, 0, 0, 2 * Math.PI);
             ctx.stroke();
             
             // 笔夹高光
             ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
             ctx.beginPath();
-            ctx.ellipse(11.5, 12, 0.8, 4, 0, 0, 2 * Math.PI);
+            ctx.ellipse(5.5, -68, 0.8, 4, 0, 0, 2 * Math.PI);
             ctx.fill();
             
             // 恢复变换状态
