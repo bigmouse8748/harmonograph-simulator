@@ -116,9 +116,9 @@
             
             <div style="margin: 10px 0;">
                 <label style="color: #4fbdba; font-size: 12px;">空气阻力:</label>
-                <input type="range" id="dampingSlider" min="0.005" max="0.5" step="0.005" value="0.01" style="width: 100%; margin: 5px 0;">
+                <input type="range" id="dampingSlider" min="0.1" max="5.0" step="0.1" value="1.0" style="width: 100%; margin: 5px 0;">
                 <div style="font-size: 10px; color: #7ec8e3; text-align: center;">
-                    <span id="dampingValue">0.01</span>
+                    <span id="dampingValue">1.0x (标准大气)</span>
                 </div>
             </div>
             
@@ -202,7 +202,12 @@
                 
                 // 环境参数
                 this.gravity = 9.81;                        // 重力加速度 (m/s²)
-                this.airDamping = params.airDamping || 0.1;  // 空气阻尼
+                this.airDamping = params.airDamping || 0.1;  // 空气阻尼系数（用户控制）
+                
+                // 真实空气阻力参数
+                this.airDensity = 1.225;                    // 空气密度 (kg/m³) - 海平面标准大气
+                this.dragCoefficient = 1.28;                // 阻力系数 - 平板垂直于气流
+                this.frontalArea = this.width * this.height;// 迎风面积 (m²)
                 
                 // 四个绳索连接点 (相对于画板质心的本地坐标，就在画板角落)
                 this.ropeAttachments = [
@@ -334,10 +339,28 @@
                     totalForce.z += tension.force.z;
                 }
                 
-                // 空气阻尼
-                totalForce.x -= this.airDamping * this.velocity.x;
-                totalForce.y -= this.airDamping * this.velocity.y;
-                totalForce.z -= this.airDamping * this.velocity.z;
+                // 真实空气阻力：F_drag = 0.5 * ρ * v² * C_d * A
+                const velocity = Math.sqrt(
+                    this.velocity.x * this.velocity.x + 
+                    this.velocity.y * this.velocity.y + 
+                    this.velocity.z * this.velocity.z
+                );
+                
+                if (velocity > 0.001) { // 避免除零
+                    // 基础空气阻力系数（1.0x = 标准大气条件）
+                    const baseDragFactor = 0.5 * this.airDensity * this.dragCoefficient * this.frontalArea;
+                    
+                    // 用户调节的空气阻力倍数
+                    const userDragFactor = baseDragFactor * this.airDamping;
+                    
+                    // 阻力大小 = 0.5 * ρ * v² * C_d * A * user_multiplier
+                    const dragMagnitude = userDragFactor * velocity * velocity;
+                    
+                    // 阻力方向与速度方向相反
+                    totalForce.x -= dragMagnitude * (this.velocity.x / velocity);
+                    totalForce.y -= dragMagnitude * (this.velocity.y / velocity);
+                    totalForce.z -= dragMagnitude * (this.velocity.z / velocity);
+                }
                 
                 // 合力矩计算 (相对于质心)
                 let totalTorque = { x: 0, y: 0, z: 0 };
@@ -569,11 +592,18 @@
             pen.visible = true;
             
             // 创建物理引擎实例
-            // 物理参数经过精心调整以获得真实的摆动速度
-            // 基于单摆公式 T = 2π√(L/g)：
+            // 物理参数经过精心调整以获得真实的摆动速度和空气阻力
+            // 
+            // 摆动周期：基于单摆公式 T = 2π√(L/g)
             // - 1.5m绳长的理论周期约为2.45秒
             // - 自然频率 ω ≈ 2.56 rad/s
-            // - 这定义了1.0x速度（真实物理速度）
+            // - 速度倍数1.0x代表真实物理速度
+            //
+            // 空气阻力：基于流体力学公式 F_drag = 0.5 * ρ * v² * C_d * A
+            // - ρ = 1.225 kg/m³ (海平面标准大气密度)
+            // - C_d = 1.28 (平板阻力系数)
+            // - A = 画板迎风面积
+            // - 阻力倍数1.0x代表标准大气条件
             physicsEngine = new SuspendedBoard({
                 width: 0.8,           // 80cm宽度
                 height: 0.6,          // 60cm高度  
@@ -581,7 +611,7 @@
                 ropeLength: 1.5,      // 1.5m绳长（更长的绳子，更慢的摆动）
                 ropeStiffness: 30,    // 弹簧常数（非常低，模拟柔性绳索）
                 ropeDamping: 1,       // 阻尼系数（很小，允许长时间摆动）
-                airDamping: 0.01      // 空气阻尼（极小值）
+                airDamping: 1.0       // 空气阻尼（1.0x = 标准大气条件）
             });
             
             // 同步初始状态到渲染
@@ -594,6 +624,11 @@
             const naturalFreq = Math.sqrt(9.81 / physicsEngine.ropeLength);
             const period = 2 * Math.PI / naturalFreq;
             log(`🔄 自然频率: ${naturalFreq.toFixed(2)} rad/s, 周期: ${period.toFixed(2)}秒`);
+            
+            // 显示空气阻力参数
+            const baseDragFactor = 0.5 * physicsEngine.airDensity * physicsEngine.dragCoefficient * physicsEngine.frontalArea;
+            log(`🌬️ 标准大气阻力: ρ=${physicsEngine.airDensity} kg/m³, Cd=${physicsEngine.dragCoefficient}, A=${physicsEngine.frontalArea.toFixed(3)} m²`);
+            log(`📐 基础阻力系数: ${baseDragFactor.toFixed(6)} N·s²/m²`);
             
             // 打印悬挂点信息
             console.log('悬挂点坐标 (物理单位，米):');
@@ -1518,12 +1553,13 @@
             const dampingValue = document.getElementById('dampingValue');
             dampingSlider.addEventListener('input', function() {
                 const newDamping = parseFloat(this.value);
-                dampingValue.textContent = newDamping.toFixed(2);
+                const dampingText = newDamping.toFixed(1) + 'x' + (newDamping === 1.0 ? ' (标准大气)' : '');
+                dampingValue.textContent = dampingText;
                 
                 // 实时更新物理引擎的阻力参数
                 if (physicsEngine) {
                     physicsEngine.airDamping = newDamping;
-                    log(`🌬️ 空气阻力调整为: ${newDamping}`);
+                    log(`🌬️ 空气阻力调整为: ${newDamping}x`);
                 }
             });
             
