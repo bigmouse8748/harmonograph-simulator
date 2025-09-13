@@ -122,6 +122,14 @@
                 </div>
             </div>
             
+            <div style="margin: 10px 0;">
+                <label style="color: #4fbdba; font-size: 12px;">悬挂点间距:</label>
+                <input type="range" id="suspensionSlider" min="0.1" max="5.0" step="0.1" value="0.5" style="width: 100%; margin: 5px 0;">
+                <div style="font-size: 10px; color: #7ec8e3; text-align: center;">
+                    <span id="suspensionValue">0.5x (画板正上方)</span>
+                </div>
+            </div>
+            
             <div class="status">
                 Canvas状态: <span id="canvasStatus">未测试</span><br>
                 画板状态: <span id="boardStatus">未显示</span><br>
@@ -195,13 +203,13 @@
                 this.ropeStiffness = params.ropeStiffness || 500; // 弹簧常数 (N/m)
                 this.ropeDamping = params.ropeDamping || 10;     // 阻尼系数 (N·s/m)
                 
+                // 环境参数
+                this.gravity = 9.81;                        // 重力加速度 (m/s²)
+                
                 // 计算基于绳长的等效刚度（模拟真实单摆）
                 // 对于小角度摆动，恢复力 F ≈ -mg·sin(θ) ≈ -mg·x/L
                 // 等效弹簧常数 k_eff = mg/L
                 this.effectiveStiffness = (this.mass * this.gravity) / this.ropeLength;
-                
-                // 环境参数
-                this.gravity = 9.81;                        // 重力加速度 (m/s²)
                 this.airDamping = params.airDamping || 0.1;  // 空气阻尼系数（用户控制）
                 
                 // 真实空气阻力参数
@@ -217,16 +225,27 @@
                     { x:  this.width/2, y:  this.height/2, z: 0 }  // 右下角
                 ];
                 
-                // 悬挂点 (世界坐标系中的固定点，在画板外侧远处)
-                const suspensionSpread = Math.max(this.width, this.height) * 2.5; // 大幅增大悬挂点间距，确保明显在画板外侧
-                this.suspensionPoints = [
-                    { x: -suspensionSpread, y: -suspensionSpread, z: this.ropeLength }, // 左上
-                    { x:  suspensionSpread, y: -suspensionSpread, z: this.ropeLength }, // 右上
-                    { x: -suspensionSpread, y:  suspensionSpread, z: this.ropeLength }, // 左下
-                    { x:  suspensionSpread, y:  suspensionSpread, z: this.ropeLength }  // 右下
-                ];
+                // 悬挂点 (世界坐标系中的固定点，间距可调)
+                this.suspensionSpreadMultiplier = params.suspensionSpread || 2.5; // 悬挂点间距倍数
+                this.updateSuspensionPoints();
                 
                 // 计算平衡位置
+                this.calculateEquilibrium();
+            }
+            
+            // 更新悬挂点位置
+            updateSuspensionPoints() {
+                // 悬挂点应该对应画板的矩形几何形状，而不是正方形
+                const suspensionX = (this.width / 2) * this.suspensionSpreadMultiplier;
+                const suspensionY = (this.height / 2) * this.suspensionSpreadMultiplier;
+                this.suspensionPoints = [
+                    { x: -suspensionX, y: -suspensionY, z: this.ropeLength }, // 左上
+                    { x:  suspensionX, y: -suspensionY, z: this.ropeLength }, // 右上
+                    { x: -suspensionX, y:  suspensionY, z: this.ropeLength }, // 左下
+                    { x:  suspensionX, y:  suspensionY, z: this.ropeLength }  // 右下
+                ];
+                
+                // 重新计算平衡位置
                 this.calculateEquilibrium();
             }
             
@@ -237,17 +256,41 @@
                 // 四根绳子的张力相等 = mg/4
                 const equilibriumTension = (this.mass * this.gravity) / 4;
                 
-                // 平衡位置：画板质心在四个悬挂点的中心下方
+                // 平衡位置：画板质心在四个悬挂点的几何中心下方
+                const centerX = (this.suspensionPoints[0].x + this.suspensionPoints[1].x + 
+                                this.suspensionPoints[2].x + this.suspensionPoints[3].x) / 4;
+                const centerY = (this.suspensionPoints[0].y + this.suspensionPoints[1].y + 
+                                this.suspensionPoints[2].y + this.suspensionPoints[3].y) / 4;
+                
+                // 计算画板在平衡位置时的高度
+                // 需要考虑绳索连接点到悬挂点的距离
+                let maxRopeDistance = 0;
+                for (let i = 0; i < 4; i++) {
+                    const attachmentX = centerX + this.ropeAttachments[i].x;
+                    const attachmentY = centerY + this.ropeAttachments[i].y;
+                    const horizontalDistance = Math.sqrt(
+                        (this.suspensionPoints[i].x - attachmentX) * (this.suspensionPoints[i].x - attachmentX) +
+                        (this.suspensionPoints[i].y - attachmentY) * (this.suspensionPoints[i].y - attachmentY)
+                    );
+                    maxRopeDistance = Math.max(maxRopeDistance, horizontalDistance);
+                }
+                
+                // 确保绳长足够，避免数学错误
+                const ropeSquared = this.ropeLength * this.ropeLength;
+                const distanceSquared = maxRopeDistance * maxRopeDistance;
+                
+                if (distanceSquared >= ropeSquared) {
+                    // 绳索太短，无法到达指定位置，设置为最低可能位置
+                    console.warn(`警告：绳索长度(${this.ropeLength.toFixed(2)}m)不足以到达悬挂点距离(${maxRopeDistance.toFixed(2)}m)`);
+                    var equilibriumZ = this.suspensionPoints[0].z - this.ropeLength * 0.99; // 几乎垂直悬挂
+                } else {
+                    var equilibriumZ = this.suspensionPoints[0].z - Math.sqrt(ropeSquared - distanceSquared);
+                }
+                
                 this.equilibriumPosition = {
-                    x: (this.suspensionPoints[0].x + this.suspensionPoints[1].x + 
-                        this.suspensionPoints[2].x + this.suspensionPoints[3].x) / 4,
-                    y: (this.suspensionPoints[0].y + this.suspensionPoints[1].y + 
-                        this.suspensionPoints[2].y + this.suspensionPoints[3].y) / 4,
-                    z: this.suspensionPoints[0].z - Math.sqrt(
-                        this.ropeLength * this.ropeLength - 
-                        (this.width/2) * (this.width/2) - 
-                        (this.height/2) * (this.height/2)
-                    )
+                    x: centerX,
+                    y: centerY,
+                    z: equilibriumZ
                 };
                 
                 // 设置初始位置为平衡位置
@@ -307,14 +350,36 @@
                 return tensions;
             }
             
-            // 本地坐标转换为世界坐标
+            // 本地坐标转换为世界坐标（包含完整3D旋转）
             transformToWorld(localPos) {
-                // 简化版本：只考虑位移，暂时忽略旋转
-                // TODO: 后续添加完整的3D旋转变换
+                const { roll, pitch, yaw } = this.rotation;
+                
+                // 旋转矩阵计算（Z-Y-X欧拉角顺序）
+                const cosRoll = Math.cos(roll), sinRoll = Math.sin(roll);
+                const cosPitch = Math.cos(pitch), sinPitch = Math.sin(pitch);
+                const cosYaw = Math.cos(yaw), sinYaw = Math.sin(yaw);
+                
+                // 复合旋转矩阵 R = Rz(yaw) * Ry(pitch) * Rx(roll)
+                const r11 = cosYaw * cosPitch;
+                const r12 = cosYaw * sinPitch * sinRoll - sinYaw * cosRoll;
+                const r13 = cosYaw * sinPitch * cosRoll + sinYaw * sinRoll;
+                const r21 = sinYaw * cosPitch;
+                const r22 = sinYaw * sinPitch * sinRoll + cosYaw * cosRoll;
+                const r23 = sinYaw * sinPitch * cosRoll - cosYaw * sinRoll;
+                const r31 = -sinPitch;
+                const r32 = cosPitch * sinRoll;
+                const r33 = cosPitch * cosRoll;
+                
+                // 应用旋转变换
+                const rotatedX = r11 * localPos.x + r12 * localPos.y + r13 * localPos.z;
+                const rotatedY = r21 * localPos.x + r22 * localPos.y + r23 * localPos.z;
+                const rotatedZ = r31 * localPos.x + r32 * localPos.y + r33 * localPos.z;
+                
+                // 加上位移
                 return {
-                    x: this.position.x + localPos.x,
-                    y: this.position.y + localPos.y,
-                    z: this.position.z + localPos.z
+                    x: this.position.x + rotatedX,
+                    y: this.position.y + rotatedY,
+                    z: this.position.z + rotatedZ
                 };
             }
             
@@ -362,12 +427,21 @@
                     totalForce.z -= dragMagnitude * (this.velocity.z / velocity);
                 }
                 
-                // 合力矩计算 (相对于质心)
+                // 合力矩计算 (相对于质心，使用世界坐标)
                 let totalTorque = { x: 0, y: 0, z: 0 };
                 
                 for (let i = 0; i < tensions.length; i++) {
-                    const r = this.ropeAttachments[i]; // 力臂向量
-                    const F = tensions[i].force;       // 力向量
+                    // 获取连接点在世界坐标系中的位置
+                    const attachmentWorld = this.transformToWorld(this.ropeAttachments[i]);
+                    
+                    // 力臂向量：从质心到连接点的向量（世界坐标系）
+                    const r = {
+                        x: attachmentWorld.x - this.position.x,
+                        y: attachmentWorld.y - this.position.y,
+                        z: attachmentWorld.z - this.position.z
+                    };
+                    
+                    const F = tensions[i].force; // 力向量
                     
                     // 叉积：τ = r × F
                     totalTorque.x += r.y * F.z - r.z * F.y;
@@ -611,7 +685,8 @@
                 ropeLength: 1.5,      // 1.5m绳长（更长的绳子，更慢的摆动）
                 ropeStiffness: 30,    // 弹簧常数（非常低，模拟柔性绳索）
                 ropeDamping: 1,       // 阻尼系数（很小，允许长时间摆动）
-                airDamping: 1.0       // 空气阻尼（1.0x = 标准大气条件）
+                airDamping: 1.0,      // 空气阻尼（1.0x = 标准大气条件）
+                suspensionSpread: 0.5 // 悬挂点间距倍数（画板正上方）
             });
             
             // 同步初始状态到渲染
@@ -1560,6 +1635,33 @@
                 if (physicsEngine) {
                     physicsEngine.airDamping = newDamping;
                     log(`🌬️ 空气阻力调整为: ${newDamping}x`);
+                }
+            });
+            
+            // 悬挂点间距控制滑块
+            const suspensionSlider = document.getElementById('suspensionSlider');
+            const suspensionValue = document.getElementById('suspensionValue');
+            suspensionSlider.addEventListener('input', function() {
+                const newSuspensionSpread = parseFloat(this.value);
+                let suspensionText;
+                if (Math.abs(newSuspensionSpread - 0.5) < 0.05) {
+                    suspensionText = '0.5x (画板正上方)';
+                } else {
+                    suspensionText = newSuspensionSpread.toFixed(1) + 'x (画板尺寸)';
+                }
+                suspensionValue.textContent = suspensionText;
+                
+                // 实时更新物理引擎的悬挂点位置
+                if (physicsEngine) {
+                    physicsEngine.suspensionSpreadMultiplier = newSuspensionSpread;
+                    physicsEngine.updateSuspensionPoints();
+                    log(`🎯 悬挂点间距调整为: ${newSuspensionSpread}x 画板尺寸`);
+                    
+                    // 打印新的悬挂点位置
+                    console.log('更新后的悬挂点坐标:');
+                    physicsEngine.suspensionPoints.forEach((point, i) => {
+                        console.log(`  悬挂点${i+1}: (${point.x.toFixed(2)}, ${point.y.toFixed(2)}, ${point.z.toFixed(2)})`);
+                    });
                 }
             });
             
